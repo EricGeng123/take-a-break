@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PostureGuard - AI 姿态守护</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script>
+        // Fallback: if jsdelivr fails, try cdnjs
+        if (typeof Chart === 'undefined') {
+            document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.7/chart.umd.min.js"><\/script>');
+        }
+    </script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="logo-icon">🦐</span>
+                <h1>PostureGuard</h1>
+            </div>
+            <nav class="nav-tabs">
+                <button class="nav-tab active" data-tab="monitor">监测</button>
+                <button class="nav-tab" data-tab="stats">统计</button>
+                <button class="nav-tab" data-tab="game">成长</button>
+                <button class="nav-tab" data-tab="settings">设置</button>
+            </nav>
+        </header>
+
+        <!-- Monitor Tab -->
+        <section id="tab-monitor" class="tab-content active">
+            <div class="monitor-layout">
+                <!-- Camera Feed -->
+                <div class="camera-section">
+                    <div class="camera-container">
+                        <video id="webcam" autoplay playsinline></video>
+                        <canvas id="pose-canvas"></canvas>
+                        <div id="camera-placeholder" class="camera-placeholder">
+                            <span class="placeholder-icon">📷</span>
+                            <p>点击下方按钮开启摄像头</p>
+                        </div>
+                    </div>
+                    <div class="camera-controls">
+                        <button id="btn-start" class="btn btn-primary">开始监测</button>
+                        <button id="btn-stop" class="btn btn-danger" style="display:none;">停止监测</button>
+                    </div>
+                </div>
+
+                <!-- Score Panel -->
+                <div class="score-section">
+                    <div class="score-ring-container">
+                        <svg class="score-ring" viewBox="0 0 200 200">
+                            <circle class="score-ring-bg" cx="100" cy="100" r="85"/>
+                            <circle id="score-ring-fill" class="score-ring-fill" cx="100" cy="100" r="85"/>
+                        </svg>
+                        <div class="score-value">
+                            <span id="score-number">--</span>
+                            <span class="score-label">姿态评分</span>
+                        </div>
+                    </div>
+
+                    <div id="posture-status" class="posture-status status-idle">
+                        <span class="status-dot"></span>
+                        <span class="status-text">等待开始</span>
+                    </div>
+
+                    <div class="session-stats">
+                        <div class="stat-item">
+                            <span class="stat-value" id="session-time">00:00</span>
+                            <span class="stat-label">本次时长</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value" id="session-good">0%</span>
+                            <span class="stat-label">良好比例</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value" id="session-alerts">0</span>
+                            <span class="stat-label">提醒次数</span>
+                        </div>
+                    </div>
+
+                    <!-- Wellness Timers -->
+                    <div class="wellness-timers">
+                        <div class="timer-card" id="timer-sit">
+                            <span class="timer-icon">🪑</span>
+                            <div class="timer-info">
+                                <span class="timer-label">连续久坐</span>
+                                <span class="timer-value" id="sit-timer">00:00</span>
+                            </div>
+                            <button class="timer-btn" id="btn-stood-up" title="我站起来了">起身</button>
+                        </div>
+                        <div class="timer-card" id="timer-water">
+                            <span class="timer-icon">💧</span>
+                            <div class="timer-info">
+                                <span class="timer-label">距上次喝水</span>
+                                <span class="timer-value" id="water-timer">00:00</span>
+                            </div>
+                            <button class="timer-btn" id="btn-drank-water" title="我喝水了">喝了</button>
+                        </div>
+                    </div>
+
+                    <!-- Current session XP -->
+                    <div class="session-xp">
+                        <span class="xp-icon">⭐</span>
+                        <span id="session-xp-value">+0 XP</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stats Tab -->
+        <section id="tab-stats" class="tab-content">
+            <div class="stats-layout">
+                <div class="stats-summary">
+                    <div class="summary-card">
+                        <span class="summary-icon">📅</span>
+                        <span class="summary-value" id="stats-total-sessions">0</span>
+                        <span class="summary-label">总会话数</span>
+                    </div>
+                    <div class="summary-card">
+                        <span class="summary-icon">⏱️</span>
+                        <span class="summary-value" id="stats-total-time">0h</span>
+                        <span class="summary-label">总监测时长</span>
+                    </div>
+                    <div class="summary-card">
+                        <span class="summary-icon">💪</span>
+                        <span class="summary-value" id="stats-avg-score">--</span>
+                        <span class="summary-label">平均评分</span>
+                    </div>
+                    <div class="summary-card">
+                        <span class="summary-icon">🔔</span>
+                        <span class="summary-value" id="stats-total-alerts">0</span>
+                        <span class="summary-label">总提醒次数</span>
+                    </div>
+                </div>
+
+                <div class="chart-container">
+                    <h3>近7天姿态评分趋势</h3>
+                    <canvas id="chart-weekly"></canvas>
+                </div>
+
+                <div class="chart-container">
+                    <h3>今日姿态分布</h3>
+                    <canvas id="chart-distribution"></canvas>
+                </div>
+
+                <div class="chart-container">
+                    <h3>每日监测时长</h3>
+                    <canvas id="chart-duration"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Game Tab -->
+        <section id="tab-game" class="tab-content">
+            <div class="game-layout">
+                <div class="shrimp-display">
+                    <div id="shrimp-avatar" class="shrimp-avatar level-1">
+                        <span class="shrimp-emoji">🦐</span>
+                    </div>
+                    <h2 id="shrimp-name">小虾米</h2>
+                    <p id="shrimp-title" class="shrimp-title">姿态新手</p>
+                </div>
+
+                <div class="xp-bar-container">
+                    <div class="xp-bar">
+                        <div id="xp-bar-fill" class="xp-bar-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="xp-info">
+                        <span id="xp-current">0</span> / <span id="xp-needed">100</span> XP
+                    </div>
+                </div>
+
+                <div class="level-info">
+                    <span class="level-badge" id="level-badge">Lv.1</span>
+                </div>
+
+                <div class="evolution-timeline">
+                    <h3>进化之路</h3>
+                    <div class="evolution-stages" id="evolution-stages">
+                        <!-- Generated by JS -->
+                    </div>
+                </div>
+
+                <div class="achievements">
+                    <h3>成就</h3>
+                    <div class="achievement-grid" id="achievement-grid">
+                        <!-- Generated by JS -->
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Settings Tab -->
+        <section id="tab-settings" class="tab-content">
+            <div class="settings-layout">
+                <div class="setting-group">
+                    <h3>检测设置</h3>
+                    <div class="setting-item">
+                        <label>灵敏度</label>
+                        <input type="range" id="setting-sensitivity" min="1" max="10" value="5">
+                        <span id="sensitivity-value">5</span>
+                    </div>
+                    <div class="setting-item">
+                        <label>驼背多久后弹窗提醒（秒）</label>
+                        <input type="number" id="setting-alert-delay" min="5" max="120" value="20">
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>健康提醒</h3>
+                    <div class="setting-item">
+                        <label>久坐提醒间隔（分钟）</label>
+                        <input type="number" id="setting-sit-interval" min="10" max="120" value="45">
+                    </div>
+                    <div class="setting-item">
+                        <label>喝水提醒间隔（分钟）</label>
+                        <input type="number" id="setting-water-interval" min="10" max="120" value="45">
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>通知设置</h3>
+                    <div class="setting-item">
+                        <label>浏览器通知</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="setting-notifications" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <label>提醒音效</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="setting-sound" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <h3>数据管理</h3>
+                    <button id="btn-export-data" class="btn btn-secondary">导出数据</button>
+                    <button id="btn-clear-data" class="btn btn-danger-outline">清除所有数据</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Notification Toast -->
+        <div id="toast" class="toast hidden">
+            <div class="toast-content">
+                <span class="toast-icon">⚠️</span>
+                <div class="toast-text">
+                    <strong>注意姿态！</strong>
+                    <p>检测到你正在驼背，请调整坐姿</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
