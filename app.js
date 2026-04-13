@@ -372,6 +372,9 @@ function detectLoop() {
             lastVideoTime = webcam.currentTime;
             const result = poseLandmarker.detectForVideo(webcam, now);
 
+            // Gesture detection runs EVERY frame (even when no pose)
+            detectGestures(result.landmarks);
+
             if (result.landmarks && result.landmarks.length > 0) {
                 drawPose(result.landmarks);
 
@@ -382,7 +385,6 @@ function detectLoop() {
                     postureStatus.querySelector('.status-text').textContent =
                         `校准中...请保持端正坐姿 (${progress}%)`;
                     postureStatus.className = 'posture-status status-idle';
-                    // Still call to collect calibration data
                     calculatePostureScore(result.landmarks);
                 } else {
                     const score = calculatePostureScore(result.landmarks);
@@ -1056,19 +1058,28 @@ function initSettings() {
     });
 }
 
-// --- Wellness Timers (sit + water) ---
+// --- Wellness Timers + Camera Gesture Detection ---
 let wellnessTimers = {
-    sitStart: null,       // when user started sitting
-    waterStart: null,     // when user last drank water
-    sitAlerted: false,    // already alerted this cycle?
+    sitStart: null,
+    waterStart: null,
+    sitAlerted: false,
     waterAlerted: false,
     intervalId: null,
+    overlayType: null,   // 'sit' | 'water' | null
+    overlayProgress: 0,
+    // Camera gesture detection state
+    noPersonFrames: 0,   // consecutive frames with no person detected
+    personBackFrames: 0, // consecutive frames person is back after being gone
+    wasGone: false,      // person left the frame
+    drinkFrames: 0,      // consecutive frames of "drinking" gesture
+    soundIntervalId: null,
 };
 
 const sitTimerEl = $('#sit-timer');
 const waterTimerEl = $('#water-timer');
 const timerSitCard = $('#timer-sit');
 const timerWaterCard = $('#timer-water');
+const wellnessOverlay = $('#wellness-overlay');
 
 function startWellnessTimers() {
     const now = Date.now();
@@ -1076,8 +1087,11 @@ function startWellnessTimers() {
     wellnessTimers.waterStart = now;
     wellnessTimers.sitAlerted = false;
     wellnessTimers.waterAlerted = false;
+    wellnessTimers.overlayType = null;
+    wellnessTimers.noPersonFrames = 0;
+    wellnessTimers.drinkFrames = 0;
+    wellnessTimers.wasGone = false;
 
-    // Update every second
     if (wellnessTimers.intervalId) clearInterval(wellnessTimers.intervalId);
     wellnessTimers.intervalId = setInterval(updateWellnessTimers, 1000);
 }
@@ -1087,6 +1101,7 @@ function stopWellnessTimers() {
         clearInterval(wellnessTimers.intervalId);
         wellnessTimers.intervalId = null;
     }
+    dismissOverlay();
     sitTimerEl.textContent = '00:00';
     waterTimerEl.textContent = '00:00';
     timerSitCard.className = 'timer-card';
@@ -1111,7 +1126,6 @@ function updateWellnessTimers() {
     const sitElapsed = now - wellnessTimers.sitStart;
     sitTimerEl.textContent = formatTimer(sitElapsed);
 
-    // Visual states: warning at 80%, alert at 100%
     const sitRatio = sitElapsed / sitIntervalMs;
     if (sitRatio >= 1) {
         timerSitCard.className = 'timer-card alert';
@@ -1143,39 +1157,175 @@ function updateWellnessTimers() {
     }
 }
 
+// ---- Full-screen strong push ----
 function triggerWellnessAlert(type) {
     const isWater = type === 'water';
-    const icon = isWater ? '💧' : '🪑';
-    const title = isWater ? '该喝水了！' : '该起身活动了！';
     const mins = isWater ? appData.settings.waterInterval : appData.settings.sitInterval;
-    const msg = isWater
-        ? `你已经 ${mins} 分钟没喝水了，喝点水吧`
-        : `你已经连续坐了 ${mins} 分钟，站起来活动一下`;
 
-    showToast(icon, title, msg, 'warning');
+    // Show full-screen overlay
+    wellnessTimers.overlayType = type;
+    wellnessTimers.overlayProgress = 0;
+    $('#overlay-icon').textContent = isWater ? '💧' : '🪑';
+    $('#overlay-title').textContent = isWater ? '该喝水了！' : '该起身活动了！';
+    $('#overlay-message').textContent = isWater
+        ? `你已经 ${mins} 分钟没喝水了`
+        : `你已经连续坐了 ${mins} 分钟`;
+    $('#overlay-action').querySelector('.action-hint').textContent = isWater
+        ? '请拿起杯子喝水，摄像头检测到喝水动作后自动消除'
+        : '请站起来离开座位，摄像头检测到你离开后自动消除';
+    $('#overlay-progress').style.width = '0%';
+    wellnessOverlay.classList.remove('hidden');
 
+    // Play sound
     if (appData.settings.sound) {
         playAlertSound();
+        // Repeat sound every 15 seconds while overlay is shown
+        if (wellnessTimers.soundIntervalId) clearInterval(wellnessTimers.soundIntervalId);
+        wellnessTimers.soundIntervalId = setInterval(() => {
+            if (wellnessTimers.overlayType) playAlertSound();
+            else clearInterval(wellnessTimers.soundIntervalId);
+        }, 15000);
     }
 
+    // Browser notification
     if (appData.settings.notifications && Notification.permission === 'granted') {
-        new Notification(`PostureGuard - ${title}`, { body: msg, silent: true });
+        new Notification(`别工作啦 - ${isWater ? '喝水提醒' : '久坐提醒'}`, {
+            body: isWater
+                ? `你已经 ${mins} 分钟没喝水了，喝点水吧！`
+                : `你已经连续坐了 ${mins} 分钟，站起来活动一下！`,
+            requireInteraction: true,
+        });
+    }
+
+    state.sessionAlerts++;
+}
+
+function dismissOverlay() {
+    wellnessOverlay.classList.add('hidden');
+    wellnessTimers.overlayType = null;
+    if (wellnessTimers.soundIntervalId) {
+        clearInterval(wellnessTimers.soundIntervalId);
+        wellnessTimers.soundIntervalId = null;
     }
 }
 
-// Button handlers
-$('#btn-stood-up').addEventListener('click', () => {
+// Manual dismiss button
+$('#overlay-dismiss').addEventListener('click', () => {
+    const type = wellnessTimers.overlayType;
+    dismissOverlay();
+    if (type === 'sit') resetSitTimer('手动关闭');
+    else resetWaterTimer('手动关闭');
+});
+
+function resetSitTimer(reason) {
     wellnessTimers.sitStart = Date.now();
     wellnessTimers.sitAlerted = false;
+    wellnessTimers.wasGone = false;
+    wellnessTimers.noPersonFrames = 0;
     timerSitCard.className = 'timer-card';
-    showToast('🏃', '已记录起身', '计时已重置，继续保持活动', 'success');
+    if (wellnessTimers.overlayType === 'sit') dismissOverlay();
+    if (reason) showToast('🏃', '已记录起身', reason, 'success');
+}
+
+function resetWaterTimer(reason) {
+    wellnessTimers.waterStart = Date.now();
+    wellnessTimers.waterAlerted = false;
+    wellnessTimers.drinkFrames = 0;
+    timerWaterCard.className = 'timer-card';
+    if (wellnessTimers.overlayType === 'water') dismissOverlay();
+    if (reason) showToast('💧', '已记录喝水', reason, 'success');
+}
+
+// ---- Camera-based gesture detection ----
+// Called every frame from detectLoop
+
+function detectGestures(landmarks) {
+    // === STAND UP DETECTION ===
+    // No landmarks = person left the frame
+    if (!landmarks || landmarks.length === 0) {
+        wellnessTimers.noPersonFrames++;
+        wellnessTimers.personBackFrames = 0;
+
+        // Person gone for 30+ frames (~1 second) = they stood up
+        if (wellnessTimers.noPersonFrames > 30 && !wellnessTimers.wasGone) {
+            wellnessTimers.wasGone = true;
+        }
+        return;
+    }
+
+    // Person IS in frame
+    if (wellnessTimers.wasGone) {
+        wellnessTimers.personBackFrames++;
+        // Person was gone and came back for 15+ frames = confirmed return
+        if (wellnessTimers.personBackFrames > 15) {
+            resetSitTimer('摄像头检测到你起身了');
+        }
+    }
+    wellnessTimers.noPersonFrames = 0;
+
+    // === DRINKING DETECTION ===
+    // Detect wrist near mouth/nose = drinking gesture
+    const lm = landmarks[0];
+    const nose = lm[0];
+    const leftWrist = lm[15];
+    const rightWrist = lm[16];
+    const leftShoulder = lm[11];
+    const rightShoulder = lm[12];
+
+    if (!nose || !leftWrist || !rightWrist || !leftShoulder || !rightShoulder) return;
+
+    const shoulderWidth = Math.abs(leftShoulder.x - rightShoulder.x) || 0.01;
+
+    // Check if either wrist is near the nose/mouth area
+    // "Near" = within 0.6x shoulder width horizontally, and wrist is above shoulder level
+    const shoulderMidY = (leftShoulder.y + rightShoulder.y) / 2;
+    const noseX = nose.x;
+    const noseY = nose.y;
+
+    let isDrinking = false;
+    for (const wrist of [leftWrist, rightWrist]) {
+        const distX = Math.abs(wrist.x - noseX) / shoulderWidth;
+        const distY = Math.abs(wrist.y - noseY) / shoulderWidth;
+        const wristAboveShoulder = wrist.y < shoulderMidY;
+
+        // Wrist close to face and above shoulders
+        if (distX < 0.7 && distY < 0.6 && wristAboveShoulder) {
+            isDrinking = true;
+            break;
+        }
+    }
+
+    if (isDrinking) {
+        wellnessTimers.drinkFrames++;
+        // Need ~20 frames (~0.7s) of sustained gesture to confirm
+        if (wellnessTimers.drinkFrames >= 20) {
+            resetWaterTimer('摄像头检测到喝水动作');
+            wellnessTimers.drinkFrames = 0;
+        }
+        // Update overlay progress if water overlay is showing
+        if (wellnessTimers.overlayType === 'water') {
+            wellnessTimers.overlayProgress = Math.min(100, (wellnessTimers.drinkFrames / 20) * 100);
+            $('#overlay-progress').style.width = wellnessTimers.overlayProgress + '%';
+        }
+    } else {
+        // Allow brief interruptions (don't reset immediately)
+        if (wellnessTimers.drinkFrames > 0) wellnessTimers.drinkFrames--;
+    }
+
+    // Update sit overlay progress when person starts leaving
+    if (wellnessTimers.overlayType === 'sit' && wellnessTimers.noPersonFrames > 0) {
+        const progress = Math.min(100, (wellnessTimers.noPersonFrames / 30) * 100);
+        $('#overlay-progress').style.width = progress + '%';
+    }
+}
+
+// Fallback button handlers (manual reset)
+$('#btn-stood-up').addEventListener('click', () => {
+    resetSitTimer('手动标记起身');
 });
 
 $('#btn-drank-water').addEventListener('click', () => {
-    wellnessTimers.waterStart = Date.now();
-    wellnessTimers.waterAlerted = false;
-    timerWaterCard.className = 'timer-card';
-    showToast('💧', '已记录喝水', '计时已重置，保持水分摄入', 'success');
+    resetWaterTimer('手动标记喝水');
 });
 
 // --- Init ---

@@ -86,18 +86,18 @@
                         <div class="timer-card" id="timer-sit">
                             <span class="timer-icon">🪑</span>
                             <div class="timer-info">
-                                <span class="timer-label">连续久坐</span>
+                                <span class="timer-label">连续久坐 <span class="auto-tag">自动检测</span></span>
                                 <span class="timer-value" id="sit-timer">00:00</span>
                             </div>
-                            <button class="timer-btn" id="btn-stood-up" title="我站起来了">起身</button>
+                            <button class="timer-btn" id="btn-stood-up" title="手动标记起身">起身</button>
                         </div>
                         <div class="timer-card" id="timer-water">
                             <span class="timer-icon">💧</span>
                             <div class="timer-info">
-                                <span class="timer-label">距上次喝水</span>
+                                <span class="timer-label">距上次喝水 <span class="auto-tag">自动检测</span></span>
                                 <span class="timer-value" id="water-timer">00:00</span>
                             </div>
-                            <button class="timer-btn" id="btn-drank-water" title="我喝水了">喝了</button>
+                            <button class="timer-btn" id="btn-drank-water" title="手动标记喝水">喝了</button>
                         </div>
                     </div>
 
@@ -255,6 +255,22 @@
                     <strong>注意姿态！</strong>
                     <p>检测到你正在驼背，请调整坐姿</p>
                 </div>
+            </div>
+        </div>
+
+        <!-- Full-screen wellness push overlay -->
+        <div id="wellness-overlay" class="wellness-overlay hidden">
+            <div class="overlay-content">
+                <span class="overlay-icon" id="overlay-icon">🪑</span>
+                <h2 id="overlay-title">该起身活动了！</h2>
+                <p id="overlay-message">你已经连续坐了 45 分钟</p>
+                <div class="overlay-action" id="overlay-action">
+                    <span class="action-hint">请站起来离开座位，摄像头检测到你离开后自动消除</span>
+                    <div class="action-progress">
+                        <div class="action-progress-bar" id="overlay-progress"></div>
+                    </div>
+                </div>
+                <button class="btn btn-secondary overlay-dismiss" id="overlay-dismiss">手动关闭</button>
             </div>
         </div>
     </div>
